@@ -9,7 +9,6 @@ export async function GET(request: Request) {
 
   if (code) {
     const cookieStore = await cookies();
-
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -30,7 +29,6 @@ export async function GET(request: Request) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
 
     if (!error) {
-      // Update profile
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         await supabase
@@ -42,7 +40,18 @@ export async function GET(request: Request) {
     }
 
     console.error("Auth callback error:", error.message);
-    return NextResponse.redirect(`${origin}/login?error=${encodeURIComponent(error.message)}`);
+    return NextResponse.redirect(
+      `${origin}/login?error=${encodeURIComponent(error.message)}`
+    );
+  }
+
+  // Handle OAuth error redirects
+  const errorParam =
+    searchParams.get("error_description") || searchParams.get("error");
+  if (errorParam) {
+    return NextResponse.redirect(
+      `${origin}/login?error=${encodeURIComponent(errorParam)}`
+    );
   }
 
   return NextResponse.redirect(`${origin}/login?error=no_code_received`);

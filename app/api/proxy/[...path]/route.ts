@@ -4,6 +4,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { getToolUrl } from "@/lib/tools";
 import { canAccessTool, type Role } from "@/lib/access";
 
+// ═══════════════════════════════════════════════════════════════
+// /api/proxy/[...path] — Secure Reverse Proxy
+// ═══════════════════════════════════════════════════════════════
+// This is the KEY security piece. Every tool request goes through here.
+//
+// Flow:
+// 1. Browser requests /api/proxy/tco-calculator/some/page
+// 2. We validate the Supabase session
+// 3. We check the user's profile.tool_access array
+// 4. We look up the REAL tool URL from server-only env vars
+// 5. We fetch from the real URL, passing user context in headers
+// 6. We rewrite internal links so they route back through this proxy
+// 7. We return the response — browser never sees the real URL
+// ═══════════════════════════════════════════════════════════════
+
 async function getSupabase() {
   const cookieStore = await cookies();
   return createServerClient(
@@ -14,7 +29,7 @@ async function getSupabase() {
         getAll() {
           return cookieStore.getAll();
         },
-        setAll(cookiesToSet: { name: string; value: string; options?: any }[]) {
+        setAll(cookiesToSet) {
           try {
             cookiesToSet.forEach(({ name, value, options }) =>
               cookieStore.set(name, value, options)
@@ -49,6 +64,7 @@ async function proxyRequest(
   const [toolId, ...rest] = params.path;
   const subPath = rest.length > 0 ? `/${rest.join("/")}` : "";
 
+  // ── 1. Authenticate ──
   const supabase = await getSupabase();
   const auth = await validateAndGetProfile(supabase);
 
@@ -61,6 +77,7 @@ async function proxyRequest(
 
   const { user, profile } = auth;
 
+  // ── 2. Check per-user tool access ──
   const hasAccess = canAccessTool(
     profile.role as Role,
     profile.tool_access || [],
@@ -68,6 +85,7 @@ async function proxyRequest(
   );
 
   if (!hasAccess) {
+    // Log the denied attempt
     await supabase.from("tool_access_log").insert({
       user_id: user.id,
       user_email: profile.email,
@@ -83,6 +101,7 @@ async function proxyRequest(
     );
   }
 
+  // ── 3. Resolve real tool URL (server-only env var) ──
   const toolBaseUrl = getToolUrl(toolId);
 
   if (!toolBaseUrl) {
@@ -92,24 +111,31 @@ async function proxyRequest(
     );
   }
 
+  // ── 4. Build the target URL ──
   const targetUrl = new URL(subPath || "/", toolBaseUrl);
 
+  // Forward query params
   request.nextUrl.searchParams.forEach((value, key) => {
     targetUrl.searchParams.set(key, value);
   });
 
+  // ── 5. Proxy the request ──
   try {
     const proxyHeaders: Record<string, string> = {
+      // Shared secret — tool middleware validates this
       "x-proxy-secret": process.env.PROXY_SECRET || "",
+      // User context — tool can read these to personalize
       "x-user-id": user.id,
       "x-user-email": profile.email || "",
       "x-user-name": profile.full_name || "",
       "x-user-role": profile.role,
       "x-proxy-origin": process.env.NEXT_PUBLIC_SITE_URL || "",
+      // Standard headers
       Accept: request.headers.get("Accept") || "*/*",
       "User-Agent": "ve-tools-proxy/1.0",
     };
 
+    // For POST/PUT, forward content type and body
     const fetchOptions: RequestInit = {
       method,
       headers: proxyHeaders,
@@ -124,6 +150,8 @@ async function proxyRequest(
 
     const proxyResponse = await fetch(targetUrl.toString(), fetchOptions);
 
+    // ── 6. Log successful access ──
+    // Only log the initial page load, not every asset request
     if (!subPath || subPath === "/") {
       await supabase.from("tool_access_log").insert({
         user_id: user.id,
@@ -135,30 +163,38 @@ async function proxyRequest(
       });
     }
 
+    // ── 7. Handle redirects ──
     if (proxyResponse.status >= 300 && proxyResponse.status < 400) {
       const location = proxyResponse.headers.get("location");
       if (location) {
+        // Rewrite redirect URLs to go through proxy
         const redirectUrl = new URL(location, toolBaseUrl);
         const proxyPath = `/api/proxy/${toolId}${redirectUrl.pathname}${redirectUrl.search}`;
         return NextResponse.redirect(new URL(proxyPath, request.url));
       }
     }
 
+    // ── 8. Process response ──
     const contentType = proxyResponse.headers.get("content-type") || "";
 
     if (contentType.includes("text/html")) {
       let html = await proxyResponse.text();
 
+      // Rewrite asset paths: src="/" → src="/api/proxy/toolId/"
+      // This handles <script src="/_next/...">, <link href="/_next/...">, etc.
       html = html.replace(
         /(href|src|action)="\//g,
         `$1="/api/proxy/${toolId}/`
       );
 
+      // Rewrite fetch() calls in inline scripts
       html = html.replace(
         /fetch\("\//g,
         `fetch("/api/proxy/${toolId}/`
       );
 
+      // Inject a <base> tag as a safety net for any relative URLs we missed.
+      // This goes right after <head> if present.
       html = html.replace(
         /<head([^>]*)>/i,
         `<head$1><base href="/api/proxy/${toolId}/">`
@@ -175,12 +211,14 @@ async function proxyRequest(
       });
     }
 
+    // For JS, CSS, images — pass through with caching
     const body = await proxyResponse.arrayBuffer();
 
     const responseHeaders: Record<string, string> = {
       "Content-Type": contentType,
     };
 
+    // Cache static assets aggressively, don't cache API responses
     if (
       contentType.includes("javascript") ||
       contentType.includes("css") ||
@@ -199,15 +237,14 @@ async function proxyRequest(
   } catch (error) {
     console.error(`[Proxy Error] Tool: ${toolId}, Path: ${subPath}`, error);
 
-    try {
-      await supabase.from("tool_access_log").insert({
-        user_id: user.id,
-        user_email: profile.email,
-        tool_id: toolId,
-        action: "proxy_error",
-        ip_address: request.headers.get("x-forwarded-for") || "unknown",
-      });
-    } catch {}
+    // Log the error
+    await supabase.from("tool_access_log").insert({
+      user_id: user.id,
+      user_email: profile.email,
+      tool_id: toolId,
+      action: "proxy_error",
+      ip_address: request.headers.get("x-forwarded-for") || "unknown",
+    }).catch(() => {}); // Don't let logging failure break the error response
 
     return NextResponse.json(
       { error: "Tool temporarily unavailable. Please try again." },
@@ -216,6 +253,8 @@ async function proxyRequest(
   }
 }
 
+// Handle all HTTP methods
+// Next.js 15: params is a Promise
 export async function GET(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   return proxyRequest(req, "GET", await ctx.params);
 }

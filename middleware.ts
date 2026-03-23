@@ -4,7 +4,8 @@ import { NextResponse, type NextRequest } from "next/server";
 export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
 
-  if (path === "/login" || path.startsWith("/auth/")) {
+  // ── Public routes — skip auth entirely ──
+  if (path === "/login" || path.startsWith("/auth/") || path === "/demo" || path === "/api/debug") {
     return NextResponse.next();
   }
 
@@ -18,7 +19,7 @@ export async function middleware(request: NextRequest) {
         getAll() {
           return request.cookies.getAll();
         },
-        setAll(cookiesToSet: { name: string; value: string; options?: any }[]) {
+        setAll(cookiesToSet) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           );
@@ -41,6 +42,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
+  // ── Admin-only routes ──
   if (path.startsWith("/admin") || path.startsWith("/api/admin")) {
     const { data: profile } = await supabase
       .from("profiles")
