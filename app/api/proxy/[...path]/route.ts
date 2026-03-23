@@ -235,13 +235,15 @@ async function proxyRequest(
     console.error(`[Proxy Error] Tool: ${toolId}, Path: ${subPath}`, error);
 
     // Log the error
-    await supabase.from("tool_access_log").insert({
-      user_id: user.id,
-      user_email: profile.email,
-      tool_id: toolId,
-      action: "proxy_error",
-      ip_address: request.headers.get("x-forwarded-for") || "unknown",
-    }).catch(() => {}); // Don't let logging failure break the error response
+    try {
+      await supabase.from("tool_access_log").insert({
+        user_id: user.id,
+        user_email: profile.email,
+        tool_id: toolId,
+        action: "proxy_error",
+        ip_address: request.headers.get("x-forwarded-for") || "unknown",
+      });
+    } catch {} // Don't let logging failure break the error response
 
     return NextResponse.json(
       { error: "Tool temporarily unavailable. Please try again." },
