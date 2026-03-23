@@ -1,26 +1,27 @@
 import { createServerClient } from "@supabase/ssr";
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { type NextRequest } from "next/server";
 
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
   const next = searchParams.get("next") ?? "/dashboard";
 
   if (code) {
-    const cookieStore = await cookies();
+    // Collect cookies that Supabase wants to set
+    const cookiesToSet: { name: string; value: string; options?: any }[] = [];
+
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
         cookies: {
           getAll() {
-            return cookieStore.getAll();
+            return request.cookies.getAll();
           },
-          setAll(cookiesToSet: { name: string; value: string; options?: any }[]) {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set(name, value, options);
-            });
+          setAll(cookies: { name: string; value: string; options?: any }[]) {
+            // Don't set on cookieStore — collect them instead
+            cookiesToSet.push(...cookies);
           },
         },
       }
@@ -29,14 +30,25 @@ export async function GET(request: Request) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
 
     if (!error) {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        await supabase
-          .from("profiles")
-          .update({ last_login: new Date().toISOString(), status: "active" })
-          .eq("id", user.id);
-      }
-      return NextResponse.redirect(`${origin}${next}`);
+      // Create the redirect response FIRST
+      const response = NextResponse.redirect(`${origin}${next}`);
+
+      // NOW set all cookies directly on the redirect response
+      cookiesToSet.forEach(({ name, value, options }) => {
+        response.cookies.set(name, value, options);
+      });
+
+      // Update profile (fire and forget — don't block redirect)
+      supabase.auth.getUser().then(({ data: { user } }) => {
+        if (user) {
+          supabase
+            .from("profiles")
+            .update({ last_login: new Date().toISOString(), status: "active" })
+            .eq("id", user.id);
+        }
+      });
+
+      return response;
     }
 
     console.error("Auth callback error:", error.message);
@@ -45,7 +57,7 @@ export async function GET(request: Request) {
     );
   }
 
-  // Handle OAuth error redirects
+  // Handle OAuth error params
   const errorParam =
     searchParams.get("error_description") || searchParams.get("error");
   if (errorParam) {
