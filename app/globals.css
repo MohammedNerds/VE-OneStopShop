@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url("https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap");
+
+:root {
+  --nerdio-navy: #042838;
+  --nerdio-teal: #1e9db8;
+  --nerdio-lime: #cdff4e;
+  --nerdio-teal-light: #94cfd9;
+  --nerdio-dark: #03171e;
+  --nerdio-muted: #6b8a99;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "Poppins", sans-serif;
+  background: var(--nerdio-dark);
+  color: white;
+  margin: 0;
+  padding: 0;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 207, 217, 0.2);
+  border-radius: 3px;
+}
+
+/* Focus styles */
+input:focus,
+select:focus {
+  outline: none;
+  border-color: var(--nerdio-teal) !important;
+  box-shadow: 0 0 0 3px rgba(30, 157, 184, 0.12) !important;
+}
+
+input::placeholder {
+  color: #4a6878;
+}
+
+/* Animations */
+.animate-fade-slide-in {
+  animation: fadeSlideIn 0.45s ease both;
+}
+
+@keyframes fadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Code elements */
+code {
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+}
