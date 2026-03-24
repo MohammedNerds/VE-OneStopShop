@@ -17,7 +17,7 @@ const DEMO_USERS: Record<string, UserProfile> = {
     id: "demo-1",
     email: "mohammed.irfan@nerdio.net",
     full_name: "Mohammed Irfan",
-    role: "super_admin",
+    role: "admin",
     tool_access: TOOL_CATALOG.map((t) => t.id),
     status: "active",
     last_login: new Date().toISOString(),
